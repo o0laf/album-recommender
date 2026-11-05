@@ -2,7 +2,7 @@
 # Recomendador de álbumes (Vynl)
 
 Red neuronal (Keras) que, dados de 1 a 4 álbumes, recomienda 10 parecidos.
-Hecho para **Vynl**, una app social tipo Letterboxd pero de música. Proyecto de la materia Redes Neuronales.
+
 
 > Otros archivos del repo: [`AGENT.md`](AGENT.md) (qué IA se usó y cómo) y [`memoria.md`](memoria.md) (estado y decisiones, para retomar el trabajo).
 
