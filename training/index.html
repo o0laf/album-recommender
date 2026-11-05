@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vynl - Recomendador de álbumes</title>
+  <!-- La fuente de Vynl (Instrument Sans). Si no hay internet, usa la del sistema. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* Colores y medidas del diseño de Vynl: para cambiar el estilo se tocan solo estas líneas */
+    :root {
+      --blue: #478DD4;
+      --blue-dark: #3578BF;
+      --blue-soft: #EAF3FB;
+      --ink: #141414;
+      --muted: #6B6B6B;
+      --line: #E6E6E6;
+      --bg: #FFFFFF;
+      --radius: 18px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--ink);
+      font-family: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+      line-height: 1.5;
+    }
+    main { max-width: 640px; margin: 0 auto; padding: 56px 20px 96px; }
+
+    /* Encabezado */
+    .brand { font-size: 1.1rem; font-weight: 700; letter-spacing: -0.02em; display: flex; align-items: center; gap: 8px; }
+    .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--blue); display: inline-block; }
+    h1 { font-size: 2.4rem; line-height: 1.1; letter-spacing: -0.03em; margin: 48px 0 12px; font-weight: 700; }
+    .lead { color: var(--muted); margin: 0 0 36px; max-width: 46ch; }
+
+    /* Tarjeta con las casillas */
+    .card { border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; }
+    .slot { position: relative; display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    .num {
+      flex: none; width: 28px; height: 28px; border-radius: 50%;
+      background: var(--blue-soft); color: var(--blue-dark);
+      font-size: 0.8rem; font-weight: 600; display: grid; place-items: center;
+    }
+    .field { position: relative; flex: 1; }
+    input {
+      width: 100%; padding: 12px 16px; font: inherit; color: inherit;
+      border: 1px solid var(--line); border-radius: 12px; background: #fff; outline: none;
+    }
+    input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
+    input::placeholder { color: #A5A5A5; }
+    input.ok { border-color: var(--blue); background: var(--blue-soft); }
+
+    /* Lista de sugerencias */
+    .sugs {
+      position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 10;
+      list-style: none; margin: 0; padding: 6px;
+      background: #fff; border: 1px solid var(--line); border-radius: 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+    }
+    .sugs:empty { display: none; }
+    .sugs li { padding: 8px 10px; border-radius: 9px; cursor: pointer; font-size: 0.95rem; }
+    .sugs li:hover { background: var(--blue-soft); }
+    .artist { color: var(--muted); }
+
+    button#go {
+      margin-top: 12px; width: 100%; padding: 14px 20px; font: inherit; font-weight: 600;
+      color: #fff; background: var(--blue); border: 0; border-radius: 999px; cursor: pointer;
+    }
+    button#go:hover { background: var(--blue-dark); }
+    button#go:disabled { opacity: 0.6; cursor: wait; }
+
+    /* Mensajes */
+    #msg { margin: 20px 0 0; font-size: 0.95rem; }
+    #msg:empty { display: none; }
+    .error { color: #B3261E; }
+    .warn { color: #8A6D00; }
+
+    /* Resultados */
+    .results-title { margin: 48px 0 8px; font-size: 1.25rem; letter-spacing: -0.02em; display: none; }
+    #results { list-style: none; margin: 0; padding: 0; }
+    #results li {
+      display: flex; align-items: center; gap: 16px;
+      padding: 16px 0; border-bottom: 1px solid var(--line);
+    }
+    .rank { flex: none; width: 28px; font-size: 1.3rem; font-weight: 700; color: var(--blue); letter-spacing: -0.03em; }
+    .info { flex: 1; min-width: 0; }
+    .info .t { font-weight: 600; overflow-wrap: anywhere; }
+    .info .a { color: var(--muted); font-size: 0.9rem; }
+    .sim { flex: none; font-size: 0.8rem; color: var(--blue-dark); background: var(--blue-soft); border-radius: 999px; padding: 3px 10px; }
+
+    footer { margin-top: 56px; color: var(--muted); font-size: 0.85rem; }
+
+    @media (max-width: 480px) { h1 { font-size: 1.9rem; } .card { padding: 16px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><span class="dot"></span>vynl</div>
+
+    <h1>Descubrí tu próximo álbum</h1>
+    <p class="lead">Buscá de 1 a 4 álbumes que te gusten, elegilos de la lista y te recomendamos 10 parecidos.</p>
+
+    <div class="card">
+      <div class="slot"><span class="num">1</span><div class="field"><input id="a1" placeholder="Álbum 1 (ej. abbey road beatles)" autocomplete="off"><ul class="sugs"></ul></div></div>
+      <div class="slot"><span class="num">2</span><div class="field"><input id="a2" placeholder="Álbum 2" autocomplete="off"><ul class="sugs"></ul></div></div>
+      <div class="slot"><span class="num">3</span><div class="field"><input id="a3" placeholder="Álbum 3" autocomplete="off"><ul class="sugs"></ul></div></div>
+      <div class="slot"><span class="num">4</span><div class="field"><input id="a4" placeholder="Álbum 4" autocomplete="off"><ul class="sugs"></ul></div></div>
+      <button id="go">Recomendar</button>
+    </div>
+
+    <p id="msg"></p>
+
+    <h2 class="results-title" id="results-title">Te recomendamos</h2>
+    <ol id="results"></ol>
+
+    <footer>Red neuronal entrenada con calificaciones de Amazon (hasta 2018).</footer>
+  </main>
+
+  <script>
+    const msg = document.getElementById("msg");
+    const results = document.getElementById("results");
+    const resultsTitle = document.getElementById("results-title");
+    const goBtn = document.getElementById("go");
+    const chosen = {};      // id de la casilla -> { asin, title } del álbum elegido
+
+    // Los títulos vienen como "Título - Artista": separo en dos para mostrarlos mejor
+    function splitTitle(full) {
+      const i = full.lastIndexOf(" - ");
+      return i > 0 ? [full.slice(0, i), full.slice(i + 3)] : [full, ""];
+    }
+
+    // ---- Búsqueda por nombre ----
+    document.querySelectorAll(".slot").forEach(slot => {
+      const input = slot.querySelector("input");
+      const list = slot.querySelector(".sugs");
+      let timer = null;
+
+      input.addEventListener("input", () => {
+        delete chosen[input.id];           // si escribe de nuevo, se borra lo elegido
+        input.classList.remove("ok");
+        clearTimeout(timer);
+        const q = input.value.trim();
+        if (q.length < 2) { list.innerHTML = ""; return; }
+        timer = setTimeout(async () => {   // espera 250 ms a que termine de escribir
+          try {
+            const data = await (await fetch("/search?q=" + encodeURIComponent(q))).json();
+            list.innerHTML = "";
+            data.results.forEach(r => {
+              const [t, a] = splitTitle(r.title);
+              const li = document.createElement("li");
+              li.textContent = t;
+              if (a) {
+                const sp = document.createElement("span");
+                sp.className = "artist";
+                sp.textContent = " · " + a;
+                li.appendChild(sp);
+              }
+              li.addEventListener("click", () => {
+                input.value = r.title;
+                chosen[input.id] = r;
+                input.classList.add("ok");
+                list.innerHTML = "";
+              });
+              list.appendChild(li);
+            });
+          } catch (e) { list.innerHTML = ""; }
+        }, 250);
+      });
+    });
+
+    // Cerrar las sugerencias al hacer clic afuera
+    document.addEventListener("click", e => {
+      if (!e.target.closest(".field")) document.querySelectorAll(".sugs").forEach(l => l.innerHTML = "");
+    });
+
+    // ---- Recomendar ----
+    async function recommend() {
+      msg.textContent = "";
+      msg.className = "";
+      results.innerHTML = "";
+      resultsTitle.style.display = "none";
+      const albums = [];
+      for (const id of ["a1", "a2", "a3", "a4"]) {
+        const text = document.getElementById(id).value.trim();
+        if (!text) continue;
+        // Si lo eligió de la lista usamos su código; si pegó un código (ej. B000002IQ1) también anda
+        if (chosen[id]) albums.push(chosen[id].asin);
+        else if (/^[A-Za-z0-9]{10}$/.test(text)) albums.push(text);
+        else {
+          msg.className = "error";
+          msg.textContent = "Elegí \"" + text + "\" de la lista que aparece mientras escribís.";
+          return;
+        }
+      }
+      if (!albums.length) {
+        msg.className = "error";
+        msg.textContent = "Elegí al menos un álbum.";
+        return;
+      }
+
+      goBtn.disabled = true;
+      goBtn.textContent = "Buscando...";
+      try {
+        const resp = await fetch("/recommend", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ albums })
+        });
+        const data = await resp.json();
+
+        if (!resp.ok) {
+          msg.className = "error";
+          msg.textContent = data.error + (data.unknown && data.unknown.length ? " (" + data.unknown.join(", ") + ")" : "");
+          return;
+        }
+        if (data.unknown.length) {
+          msg.className = "warn";
+          msg.textContent = "No conozco estos códigos y los ignoré: " + data.unknown.join(", ");
+        }
+        resultsTitle.style.display = "block";
+        data.recommendations.forEach((r, n) => {
+          const [t, a] = splitTitle(r.title || r.asin);
+          const li = document.createElement("li");
+
+          const rank = document.createElement("span");
+          rank.className = "rank";
+          rank.textContent = n + 1;
+
+          const info = document.createElement("div");
+          info.className = "info";
+          const tt = document.createElement("div");
+          tt.className = "t";
+          tt.textContent = t;
+          info.appendChild(tt);
+          if (a) {
+            const aa = document.createElement("div");
+            aa.className = "a";
+            aa.textContent = a;
+            info.appendChild(aa);
+          }
+
+          const sim = document.createElement("span");
+          sim.className = "sim";
+          sim.textContent = Math.round(r.score * 100) + "% parecido";
+
+          li.append(rank, info, sim);
+          results.appendChild(li);
+        });
+      } catch (e) {
+        msg.className = "error";
+        msg.textContent = "No pude hablar con el servidor. ¿Está corriendo server.py?";
+      } finally {
+        goBtn.disabled = false;
+        goBtn.textContent = "Recomendar";
+      }
+    }
+
+    goBtn.addEventListener("click", recommend);
+  </script>
+</body>
+</html>

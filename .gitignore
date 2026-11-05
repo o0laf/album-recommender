@@ -1,0 +1,10 @@
+data/reviews/*
+data/metadata/*
+data/vynl/*
+data/*.npz
+!data/**/.gitkeep
+venv/
+.venv/
+__pycache__/
+*.pyc
+models/*.keras
