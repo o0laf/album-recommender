@@ -1,0 +1,36 @@
+"""Ajustes del proyecto: rutas y valores que se pueden cambiar en un solo lugar."""
+from pathlib import Path
+
+# --- Rutas (relativas a este archivo: funciona corras desde donde corras) ---
+ROOT = Path(__file__).resolve().parent.parent
+DATA_PATH = ROOT / "data" / "reviews" / "CDs_and_Vinyl_5.json.gz"
+META_PATH = ROOT / "data" / "metadata" / "meta_CDs_and_Vinyl.json.gz"
+CACHE_PATH = ROOT / "data" / "ratings_cache.npz"   # copia rápida de las 3 columnas
+MODELS_DIR = ROOT / "models"                        # acá se guarda lo que produce el entrenamiento
+VIEWS_DIR = Path(__file__).resolve().parent / "views"
+
+# --- Datos ---
+LIKE_THRESHOLD = 4     # 4 o 5 estrellas = le gustó
+N_INPUT = 4            # álbumes que le damos a cada usuario en la evaluación
+VAL_FRACTION = 0.10
+TEST_FRACTION = 0.10
+
+# --- Entrenamiento ---
+DIM = 32            # largo de cada embedding
+BATCH = 4096
+NEG_RATIO = 4       # negativos inventados por cada "me gusta"
+NEG_POWER = 0.75    # 0 = negativos totalmente al azar; 0.75 = más a menudo los populares
+LR = 0.003          # learning rate (qué tan grande es cada paso al aprender)
+MAX_EPOCHS = 20
+PATIENCE = 3        # corta si la validación no mejora en 3 épocas
+K = 10              # cuántas recomendaciones se piden
+SEED = 42
+
+# --- Recomendación ---
+CANDIDATE_FACTOR = 3        # pido k*3 candidatos y me quedo con los primeros k buenos
+DEDUPE_EDITIONS = True      # no repetir el mismo álbum en otra edición
+# Pedazos de texto que delatan basura pegada (HTML, links, etc.)
+BAD_FRAGMENTS = ("<", ">", "{", "}", "http", "www.", "&#", "&amp", "&nbsp")
+
+# --- Servidor web ---
+HOST, PORT = "127.0.0.1", 8000
