@@ -6,17 +6,17 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from config import HOST, PORT, VIEWS_DIR
-from services.catalog_service import CatalogService
-from services.recommendation_service import RecommendationService
+from services.album_catalog_service import AlbumCatalogService
+from services.album_recommendation_service import AlbumRecommendationService
 
 
-class WebController:
+class RecommendationWebController:
 
     def __init__(self):
         self.html = (VIEWS_DIR / "index.html").read_bytes()
         print("Cargando modelo...")
-        self.recommender = RecommendationService()
-        self.catalog = CatalogService(self.recommender.art.titles)
+        self.recommender = AlbumRecommendationService()
+        self.catalog = AlbumCatalogService()
         print(f"Búsqueda por nombre: {'lista' if self.catalog.enabled else 'no disponible (corré: python main.py names)'}")
 
     def make_handler(self):
@@ -60,7 +60,7 @@ class WebController:
                 unknown, recs = controller.recommender.recommend(codes, k=10)
                 if not recs:
                     return self._json(400, {"error": "Ningún álbum está en el modelo", "unknown": unknown})
-                self._json(200, {"unknown": unknown, "recommendations": recs})
+                self._json(200, {"unknown": unknown, "recommendations": [r.to_dict() for r in recs]})
 
         return Handler
 

@@ -2,12 +2,14 @@
 from pathlib import Path
 
 # --- Rutas (relativas a este archivo: funciona corras desde donde corras) ---
-ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = Path(__file__).resolve().parent
+ROOT = SRC_DIR.parent
 DATA_PATH = ROOT / "data" / "reviews" / "CDs_and_Vinyl_5.json.gz"
 META_PATH = ROOT / "data" / "metadata" / "meta_CDs_and_Vinyl.json.gz"
-CACHE_PATH = ROOT / "data" / "ratings_cache.npz"   # copia rápida de las 3 columnas
-MODELS_DIR = ROOT / "models"                        # acá se guarda lo que produce el entrenamiento
-VIEWS_DIR = Path(__file__).resolve().parent / "views"
+CACHE_PATH = ROOT / "data" / "ratings_cache.npz"    # copia rápida de las 3 columnas
+DB_PATH = ROOT / "data" / "album_recommender.db"    # base SQLite: álbumes, entrenamientos, métricas, experimentos
+ARTIFACTS_DIR = ROOT / "artifacts"                  # archivos pesados del entrenamiento: model.keras y gráficos
+VIEWS_DIR = SRC_DIR / "views"
 
 # --- Datos ---
 LIKE_THRESHOLD = 4     # 4 o 5 estrellas = le gustó

@@ -1,4 +1,4 @@
-"""Capa de servicios: lee el dataset, arma los ids y divide en train / validación / test."""
+"""Capa de servicios: lee el dataset de calificaciones, arma los ids y divide en train / validación / test."""
 import gzip
 import json
 import time
@@ -10,7 +10,7 @@ from config import (CACHE_PATH, DATA_PATH, LIKE_THRESHOLD, N_INPUT, SEED,
                     TEST_FRACTION, VAL_FRACTION)
 
 
-class DataService:
+class RatingsDatasetService:
 
     def read_ratings(self):
         """Devuelve (usuarios, álbumes, estrellas). La primera vez tarda unos minutos;

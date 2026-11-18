@@ -9,16 +9,21 @@ Cómo se mide (para cada usuario de test, que la red NUNCA vio en el entrenamien
   recall@K    = aciertos / total de álbumes que le gustaron (¿cuánto de lo que le gusta encontré?)
   F1@K        = el promedio "parejo" de los dos: 2*P*R / (P+R)
 Después se promedia entre todos los usuarios."""
-import json
-
 import numpy as np
 
-from config import K, MODELS_DIR
-from services.data_service import DataService
-from services.recommendation_service import RecommendationService
+from config import K
+from daos.metric_dao import MetricDAO
+from daos.training_run_dao import TrainingRunDAO
+from domain.metric import Metric
+from services.album_recommendation_service import AlbumRecommendationService
+from services.ratings_dataset_service import RatingsDatasetService
 
 
-class EvaluationService:
+class RecommendationEvaluationService:
+
+    def __init__(self, training_run_dao=None, metric_dao=None):
+        self.training_run_dao = training_run_dao or TrainingRunDAO()
+        self.metric_dao = metric_dao or MetricDAO()
 
     # ---------- Baseline: los más populares ----------
 
@@ -52,7 +57,7 @@ class EvaluationService:
         out = []
         for start in range(0, len(inputs), batch):           # por tandas, para no llenar la RAM
             ins = inputs[start:start + batch]
-            q = RecommendationService.normalize(emb_norm[ins].mean(axis=1))   # promedio de los 4 álbumes
+            q = AlbumRecommendationService.normalize(emb_norm[ins].mean(axis=1))   # promedio de los 4 álbumes
             scores = q @ emb_norm.T
             scores[np.arange(len(ins))[:, None], ins] = -np.inf   # no recomendar los 4 dados
             out.append(np.argpartition(scores, -k, axis=1)[:, -k:])
@@ -93,27 +98,36 @@ class EvaluationService:
             m = res[name]
             print(f"  {label}   {m['precision']:.4f}       {m['recall']:.4f}     {m['f1']:.4f}")
 
-    # ---------- Comandos que dispara main.py ----------
+    @staticmethod
+    def to_metrics(subset, res, k=K):
+        """Pasa el resultado de evaluate_ranking() a una lista de Metric (para guardar en la base)."""
+        return [Metric(subset=subset, source=source, name=name, value=res[source][name], k=k)
+                for source in ("model", "baseline") for name in ("precision", "recall", "f1")]
+
+    # ---------- Comandos que dispara la consola ----------
 
     def run_baseline(self):
         """Muestra el resultado de recomendar siempre los populares."""
-        data = DataService().build_data()
+        data = RatingsDatasetService().build_data()
         top10 = [data.idx_to_album[i] for i in self.popular_ranking(data.popularity)[:10]]
         print("Top 10 populares:", top10)
         print(f"Hit rate@10 validación: {self.baseline_hit_rate(data.popularity, data.val_inputs, data.val_targets):.4f}")
         print(f"Hit rate@10 test:       {self.baseline_hit_rate(data.popularity, data.test_inputs, data.test_targets):.4f}")
 
     def run_evaluation(self):
-        """Re-mide precision/recall/F1 sin reentrenar (necesita models/model.keras)."""
-        data = DataService().build_data()
-        art = RecommendationService().art
+        """Re-mide precision/recall/F1 sin reentrenar (necesita artifacts/model.keras y un entrenamiento
+        registrado en la base). Guarda las métricas nuevas en el último entrenamiento."""
+        run = self.training_run_dao.find_latest()
+        if run is None:
+            raise SystemExit("No hay ningún entrenamiento registrado en la base. "
+                             "Corré 'python main.py train' (o 'python main.py import-legacy' si ya tenías resultados).")
+        data = RatingsDatasetService().build_data()
+        art = AlbumRecommendationService().art
         res = self.evaluate_ranking(art.emb_norm, data.popularity, data.test_inputs, data.test_relevant)
         print("\nTEST (usuarios que la red nunca vio):")
         self.print_table(res)
 
-        # Lo sumo a metrics.json sin pisar lo que ya había
-        path = MODELS_DIR / "metrics.json"
-        metrics = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        metrics["ranking_at_10"] = {"test": res, "n_test_users_evaluated": int(len(data.test_inputs))}
-        path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+        # Se guarda en la base, sobre el último entrenamiento (si ya había esas métricas, se pisan)
+        self.metric_dao.save_all(run.id, self.to_metrics("test", res))
+        print(f"Métricas guardadas en la base (entrenamiento #{run.id}).")
         print(f"Guardé las métricas en {path}")

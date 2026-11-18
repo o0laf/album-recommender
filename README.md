@@ -1,147 +1,350 @@
+# Recomendador de álbumes Vynl
 
-# Recomendador de álbumes (Vynl)
+Proyecto educativo de sistemas de recomendación que usa una red neuronal con embeddings para sugerir álbumes a partir de 1 a 20 códigos ASIN.
 
-Red neuronal (Keras) que, dados de 1 a 4 álbumes, recomienda 10 parecidos.
+Incluye:
 
+- Entrenamiento de embeddings de usuarios y álbumes con Keras.
+- Recomendaciones por consola y servidor web local.
+- Búsqueda de álbumes por nombre.
+- Evaluación con `hit rate`, precision, recall y F1.
+- Experimentos automatizados de hiperparámetros.
+- Cobertura entre el catálogo de Vynl y el conjunto de datos.
 
-> Otros archivos del repo: [`AGENT.md`](AGENT.md) (qué IA se usó y cómo) y [`memoria.md`](memoria.md) (estado y decisiones, para retomar el trabajo).
+## Vista rápida
 
-## 1. Objetivo
+```text
+Usuario nuevo
+    |
+    +-- Embeddings de sus álbumes conocidos
+    |       |
+    |       +-- promedio del vector
+    |
+    +-- similitud coseno con todos los álbumes
+            |
+            +-- excluir álbumes conocidos
+            +-- filtrar ediciones y productos no válidos
+            +-- devolver los 10 resultados más cercanos
+```
 
-Aprender, a partir de lo que le gustó a mucha gente, qué álbumes "van juntos".
-Si te gustaron los álbumes A, B y C, la red busca álbumes que le suelen gustar a la gente que también ama A, B y C.
+La aplicación usa **dos interfaces**:
 
-## 2. Dataset (la base de datos)
+- CLI: `python src/main.py recommend B000...`
+- Web: `python src/main.py server` y luego `http://127.0.0.1:8000`
 
-**Amazon Review Data (2018)**, Jianmo Ni, Jiacheng Li, Julian McAuley (UCSD):
-https://cseweb.ucsd.edu/~jmcauley/datasets/amazon_v2
+## Datos
 
-- Categoría **CDs and Vinyl**, versión **5-core** (cada usuario y cada álbum tienen al menos 5 reseñas).
-- 1.402.148 calificaciones únicas, 112.395 usuarios y 73.713 álbumes.
-- Se usan solo 3 columnas: `reviewerID` (usuario), `asin` (código del álbum) y `overall` (estrellas de 1 a 5). **El texto de las reseñas no se usa.**
-- 4 o 5 estrellas = "le gustó". 1 a 3 estrellas = "no le gustó".
-- Los archivos no se suben a GitHub (son pesados). Se ponen en:
-  - `data/reviews/CDs_and_Vinyl_5.json.gz`
-  - `data/metadata/meta_CDs_and_Vinyl.json.gz` (opcional: sirve para los nombres de los álbumes)
-- Además, `coverage.py` lee la base `database.sqlite` de Vynl (solo lectura) para medir cuántos álbumes de la app existen en el modelo.
+Se utiliza **Amazon Review Data 2018**, categoría **CDs and Vinyl**, versión 5-core:
 
-## 3. Arquitectura de la red
+- [Dataset oficial](https://cseweb.ucsd.edu/~jmcauley/datasets/amazon_v2)
+- 1.402.148 interacciones únicas.
+- 112.395 usuarios.
+- 73.713 álbumes.
+- Solo se usan `reviewerID`, `asin` y `overall`.
 
-    usuario > Embedding (32 números) ─┐
-                                      ├> producto punto > sigmoide > probabilidad de "le gusta"
-    álbum   > Embedding (32 números) ─┘
+Una reseña de 4 o 5 estrellas se considera positiva. Las reseñas de 1 a 3 estrellas se consideran negativas.
 
-| Capa                 | Qué hace                                                | Tamaño              |
-| -------------------- | -------------------------------------------------------- | -------------------- |
-| Embedding de usuario | Convierte cada usuario en un vector de 32 números       | 89.917 usuarios x 32 |
-| Embedding de álbum  | Convierte cada álbum en un vector de 32 números        | 73.700 álbumes x 32 |
-| Producto punto       | Si los dos vectores apuntan parecido, el número es alto | 1 número            |
-| Sigmoide             | Pasa ese número a un valor entre 0 y 1                  | 1 número            |
+Los datos deben colocarse en:
 
-Código: `training/model.py`. Pérdida: `binary_crossentropy`. Optimizador: Adam (learning rate 0,003).
+```text
+data/
+  reviews/
+    CDs_and_Vinyl_5.json.gz
+  metadata/
+    meta_CDs_and_Vinyl.json.gz
+```
 
-**Para recomendar a alguien nuevo** no se usa el embedding de usuario (esa persona no existe en el entrenamiento).
-Se promedian los vectores de sus álbumes, se buscan los álbumes más cercanos (similitud coseno) y se sacan los que ya puso.
+El archivo de metadata es opcional para entrenar y evaluar, pero es necesario para buscar álbumes por nombre.
 
-## 4. Entrenamiento
+## Instalación
 
-- **Positivos:** las calificaciones de 4 o 5 estrellas.
-- **Negativos:** las de 1 a 3 estrellas, más 4 álbumes sorteados al azar por cada positivo. Se sortean de nuevo en cada época. Los populares salen más seguido (`NEG_POWER = 0.75`).
-- **Ajustes:** `DIM = 32`, `BATCH = 4096`, `NEG_RATIO = 4`, `NEG_POWER = 0.75`, `LR = 0.003`, hasta 20 épocas.
-- **Early stopping:** si la validación no mejora en 3 épocas, se corta y se queda la mejor época.
-- **División:** los **usuarios** se dividen en 80 % train, 10 % validación y 10 % test. Así, el test son personas que la red nunca vio.
+Se recomienda Python 3.11 o 3.12. Desde PowerShell, en la raíz del proyecto:
 
-## 5. Evaluación
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
 
-A cada usuario de test se le dan 4 álbumes que le gustaron y se piden 10 recomendaciones (sin repetir esos 4).
-**Acierto** = una recomendación que también le gustó a esa persona.
+Si PowerShell bloquea la activación del entorno:
 
-| Métrica               | Qué responde                                                                      |
-| ---------------------- | ---------------------------------------------------------------------------------- |
-| **hit rate@10**  | ¿Apareció entre los 10 un álbum escondido que le gustó? (sí / no)             |
-| **precision@10** | De los 10 recomendados, ¿qué parte le gustó? (aciertos / 10)                    |
-| **recall@10**    | De todo lo que le gustó, ¿qué parte encontré? (aciertos / total que le gustó) |
-| **F1@10**        | Promedio parejo de precision y recall: 2·P·R / (P+R)                             |
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\venv\Scripts\Activate.ps1
+```
 
-Se promedia entre todos los usuarios de test y se compara con un **baseline**: recomendar siempre los 10 álbumes más populares.
+El proyecto usa TensorFlow, NumPy y Matplotlib:
 
-> Por qué precision, recall y F1 se miden sobre el ranking y no con "umbral 0,5": la red tiene un embedding por usuario,
-> así que no puede opinar sobre usuarios que nunca vio. Medir el ranking es medir lo que hace la app de verdad.
+```text
+tensorflow>=2.12
+numpy
+matplotlib
+```
 
-## 6. Feedback loop (probar, medir, ajustar)
+## Uso
 
-Si el resultado no mejora, se cambia un ajuste y se reentrena. `training/experiments.py` automatiza eso:
-prueba varias configuraciones (cada una cambia **un** ajuste respecto de la base) y guarda una fila por prueba en
-`models/experiments.csv`. La mejor se elige con **validación**, nunca con test.
+Ejecuta los comandos desde la carpeta `src/`:
 
-| Ajuste        | Qué cambia                                   | Valores probados |
-| ------------- | --------------------------------------------- | ---------------- |
-| `DIM`       | Largo de cada embedding                       | 16, 32, 64       |
-| `NEG_RATIO` | Negativos por cada "me gusta"                 | 2, 4, 8          |
-| `NEG_POWER` | Qué tanto salen los populares como negativos | 0, 0,75, 1       |
-| `BATCH`     | Ejemplos por paso de entrenamiento            | 1024, 4096       |
+```powershell
+cd src
+```
 
-## 7. Cómo correrlo (PowerShell, desde la carpeta `training/`)
+### Preparar los datos
 
-    pip install -r ../requirements.txt
-    python preprocessing.py       # lee los datos (la 1ª vez tarda unos minutos y arma un caché)
-    python baseline.py            # resultado de los populares
-    python train.py               # entrena, evalúa y guarda todo en models/
-    python evaluate.py            # (opcional) re-mide precision/recall/F1 sin reentrenar
-    python experiments.py         # (opcional) prueba configuraciones > models/experiments.csv
-    python names.py               # (opcional) títulos para buscar álbumes por nombre
-    python recommend.py CODIGO1 CODIGO2
-    python server.py              # abrir http://127.0.0.1:8000
-    python coverage.py ../data/vynl/database.sqlite   # (opcional) cobertura con el catálogo de Vynl
+```powershell
+python main.py preprocess
+```
 
-**Entorno de ejecución en Codelab:** COMPLETAR (link o pasos; son los mismos comandos de arriba, desde `training/`).
+Lee el archivo comprimido de reseñas y crea `data/ratings_cache.npz`.
 
-## 8. Resultados
+### Entrenar y evaluar
 
-Medido en test (usuarios que la red nunca vio). Fuente: `models/metrics.json`.
+```powershell
+python main.py baseline
+python main.py train
+```
 
-|                           | Red              | Populares |
-| ------------------------- | ---------------- | --------- |
-| hit rate@10 (test)        | **0,0362** | 0,0069    |
-| hit rate@10 (validación) | 0,0347           | 0,0050    |
-| precision@10 (test)       | COMPLETAR        | COMPLETAR |
-| recall@10 (test)          | COMPLETAR        | COMPLETAR |
-| F1@10 (test)              | COMPLETAR        | COMPLETAR |
+`train` genera el modelo y los gráficos en `artifacts/` y guarda el historial, las métricas y los resultados en `data/album_recommender.db`.
 
-- La red acierta unas **5 veces más** que recomendar siempre los populares.
-- Mejor época: la 8. La pérdida de entrenamiento sigue bajando después, pero la validación deja de mejorar: es sobreajuste, y por eso se usa early stopping.
-- Gráficos en `models/`: `training_curves.png`, `hit_rate_comparison.png` y `ranking_metrics.png`.
-- Los números de precision / recall / F1 salen al correr `train.py` o `evaluate.py` (completar la tabla con `models/metrics.json`).
+Para volver a calcular la evaluación sin entrenar:
 
-## 9. Filtro de recomendaciones
+```powershell
+python main.py evaluate
+```
 
-En Amazon cada edición es un producto distinto, y hay singles y títulos con basura (HTML pegado, títulos vacíos).
-Por eso `recommend.py` pide 30 candidatos y se queda con los primeros 10 que **no** sean:
+### Obtener recomendaciones
 
-- singles (título con "single" o con "/" doble tema),
-- álbumes sin título,
-- títulos con texto raro (HTML, links, casi todo símbolos),
-- otra edición de un álbum que ya puso el usuario o que ya está en la lista.
+Pasa uno o más códigos ASIN separados por espacios:
 
-Esto necesita los títulos (`python names.py`). Sin títulos, no se filtra.
+```powershell
+python main.py recommend B000002IQ1 B000002UB4
+```
 
-## 10. Limitaciones
+También puede cambiarse el número de resultados:
 
-- Un hit rate de 3,6 % parece bajo: hay 73.700 álbumes y se mira un solo álbum escondido entre 10. Lo importante es la comparación con populares.
-- Los álbumes nuevos o con pocas reseñas no están en el modelo.
-- Solo se evalúan usuarios con al menos 5 álbumes que les gustaron.
-- Recall@10 tiene un tope: con 10 recomendaciones no se pueden encontrar más de 10 álbumes.
-- El filtro es por reglas simples y puede dejar pasar algún título raro o tirar uno bueno.
-- No se usa el texto de las reseñas ni datos como género o artista.
+```powershell
+python main.py recommend B000002IQ1 B000002UB4 -k 10
+```
 
-## 11. Estructura
+Antes de usar nombres, procesa el catálogo de metadata:
 
-    training/   preprocessing.py  model.py  baseline.py  train.py  evaluate.py  experiments.py
-                recommend.py  server.py  index.html  names.py  coverage.py
-    models/     modelo, métricas, gráficos y experiments.csv (los .keras no se suben a GitHub)
-    data/       datos descargados (no se suben a GitHub)
+```powershell
+python main.py names
+```
 
-## Cita
+### Abrir la interfaz web
 
-Ni, Li, McAuley. "Justifying recommendations using distantly-labeled reviews and
-fined-grained aspects". EMNLP 2019.
+```powershell
+python main.py server
+```
+
+Abre `http://127.0.0.1:8000`. La interfaz permite buscar por nombre, seleccionar álbumes y solicitar recomendaciones.
+
+### Probar configuraciones
+
+```powershell
+python main.py experiments
+python main.py experiments --solo base dim64
+python main.py experiments --max-epochs 3
+```
+
+Las pruebas guardan una fila por configuración en la tabla `experiment`. La selección se hace con validación, no con test.
+
+### Medir cobertura de Vynl
+
+Si tienes una copia local de `database.sqlite` del catálogo de Vynl:
+
+```powershell
+python main.py coverage ../data/vynl/database.sqlite
+```
+
+El resultado indica cuántos álbumes del catálogo están presentes en el modelo entrenado.
+
+### Importar artefactos anteriores
+
+```powershell
+python main.py import-legacy
+```
+
+Importa una sola vez los archivos `.json` o `.csv` de una versión anterior del proyecto.
+
+## Cómo funciona
+
+### Arquitectura del modelo
+
+El modelo aprende un vector de 32 números para cada usuario y otro para cada álbum:
+
+```text
+usuario -> embedding (32) --\
+                             +-> producto punto -> sigmoide -> probabilidad
+álbum   -> embedding (32) --/
+```
+
+| Componente | Descripción | Dimensiones |
+| --- | --- | --- |
+| Embedding de usuarios | Representación aprendida de cada usuario | 89.917 × 32 |
+| Embedding de álbumes | Representación aprendida de cada álbum | 73.700 × 32 |
+| Producto punto | Mide la similitud entre usuario y álbum | 1 |
+| Sigmoide | Convierte el producto en una probabilidad | 1 |
+
+El código se encuentra en `src/ml/album_embedding_network.py`. El modelo usa binary cross-entropy y Adam con learning rate `0.003`.
+
+Como la aplicación recomienda a usuarios que no forman parte del entrenamiento, no usa su embedding. En su lugar:
+
+1. Toma los embeddings de los álbumes seleccionados.
+2. Calcula su promedio.
+3. Busca los álbumes con mayor similitud coseno.
+4. Elimina los álbumes ya conocidos y duplica ediciones.
+
+### Entrenamiento
+
+- Positivos: calificaciones de 4 o 5 estrellas.
+- Negativos: calificaciones de 1 a 3 estrellas y álbumes muestreados aleatoriamente.
+- Negativos por positivo: 4.
+- Épocas máximas: 20.
+- Early stopping: detiene el entrenamiento tras 3 épocas sin mejora en validación.
+- Tamaño de lote: 4096.
+
+Los negativos se muestrean nuevamente en cada época. `NEG_POWER = 0.75` hace que los álbumes populares tengan más probabilidades de aparecer como negativos.
+
+### División de datos
+
+La división se realiza por usuario:
+
+- 80% entrenamiento.
+- 10% validación.
+- 10% test.
+
+Los usuarios de validación y test no participan en el entrenamiento.
+
+## Evaluación
+
+Para cada usuario de test se esconden parte de sus álbumes positivos: se usan 4 como entrada y se pide un ranking de 10 álbumes.
+
+| Métrica | Interpretación |
+| --- | --- |
+| Hit rate@10 | Porcentaje de usuarios para los que aparece al menos un álbum relevante |
+| Precision@10 | Proporción de aciertos entre las 10 recomendaciones |
+| Recall@10 | Proporción de álbumes relevantes recuperados |
+| F1@10 | Media armónica de precision y recall |
+
+También se calcula un baseline que siempre recomienda los 10 álbumes más populares.
+
+## Resultados registrados
+
+Los valores siguientes proceden de `artifacts/metrics.json` y `data/album_recommender.db`.
+
+| Métrica | Modelo test | Populares test |
+| --- | ---: | ---: |
+| Hit rate@10 | 3.615% | 0.691% |
+| Precision@10 | 1.380% | 0.461% |
+| Recall@10 | 3.652% | 0.659% |
+| F1@10 | 1.591% | 0.378% |
+
+| Métrica | Modelo validación | Populares validación |
+| --- | ---: | ---: |
+| Hit rate@10 | 3.467% | 0.497% |
+| Precision@10 | 1.333% | 0.457% |
+| Recall@10 | 3.428% | 0.562% |
+| F1@10 | 1.490% | 0.350% |
+
+El modelo obtuvo aproximadamente **5.2 veces más hit rate** que el baseline en test.
+
+- Usuarios evaluados en test: 9.266.
+- Usuarios evaluados en validación: 9.260.
+- Mejor época: 8.
+- Épocas ejecutadas: 11.
+
+Las gráficas disponibles son:
+
+- `artifacts/training_curves.png`
+- `artifacts/hit_rate_comparison.png`
+- `artifacts/ranking_metrics.png`
+
+## Experimentos disponibles
+
+| Ajuste | Valor base | Valores probados |
+| --- | ---: | --- |
+| `DIM` | 32 | 16, 32, 64 |
+| `NEG_RATIO` | 4 | 2, 4, 8 |
+| `NEG_POWER` | 0.75 | 0, 0.75, 1 |
+| `BATCH` | 4096 | 1024, 4096 |
+
+Cada experimento cambia un ajuste respecto de la configuración base.
+
+## Filtro de resultados
+
+Amazon puede representar una misma edición como varios productos. Para reducir duplicados y resultados de baja calidad, el servicio solicita 30 candidatos y conserva los 10 mejores que cumplen estas reglas:
+
+- No son sencillos cuyo título contiene `single` o usa `/` como separador de temas.
+- Tienen título.
+- No contienen fragmentos sospechosos como HTML, enlaces o entidades.
+- No repiten otra edición de un álbum seleccionado.
+- No repiten álbumes dentro del ranking.
+
+Este filtrado depende de haber ejecutado `python main.py names`. Sin el catálogo de títulos solo se aplican las comprobaciones básicas disponibles.
+
+## Estructura
+
+```text
+src/
+  main.py                         Punto de entrada CLI
+  config.py                       Rutas e hiperparámetros
+  controllers/                    Entrada de consola y servidor web
+  services/                       Reglas de negocio y evaluación
+  daos/                           Acceso a SQLite
+  domain/                         Entidades del proyecto
+  database/                       Conexión y creación de tablas
+  ml/                             Red neuronal con Keras
+  views/index.html                Interfaz web
+
+data/
+  reviews/                        Dataset descargado
+  metadata/                       Metadata descargada
+  ratings_cache.npz               Caché generado
+  album_recommender.db            Base SQLite generada
+
+artifacts/
+  model.keras                     Modelo generado
+  album_to_idx.json               Índices ASIN
+  album_titles.json               Catálogo de títulos
+  metrics.json                    Últimos resultados
+  *.png                           Gráficas
+```
+
+La separación sigue una arquitectura por capas:
+
+```text
+CLI / HTTP
+  -> controllers
+  -> services
+  -> daos
+  -> SQLite
+
+domain/ contiene las entidades compartidas.
+```
+
+## Tablas SQLite
+
+`data/album_recommender.db` contiene:
+
+- `album`
+- `training_run`
+- `epoch_record`
+- `metric`
+- `experiment`
+- `vynl_coverage`
+
+## Limitaciones
+
+- Los álbumes nuevos o con pocas reseñas no están presentes en el modelo.
+- Solo se evalúan usuarios con suficientes álbumes relevantes.
+- Recall@10 tiene un límite práctico de 10 recomendaciones.
+- El filtro de títulos usa reglas simples y puede descartar álbumes válidos.
+- No se usa el texto de las reseñas, género, artista ni metadatos audiovisuales.
+- Los resultados dependen del muestreo y de la partición definida por la semilla.
+
+## Referencia
+
+Ni, J., Li, J. y McAuley, J. *Justifying recommendations using distantly-labeled reviews and fined-grained aspects*. EMNLP, 2019.

@@ -1,6 +1,7 @@
-"""Capa de servicios: entrena la red, la evalúa contra el baseline y guarda todo en models/."""
-import json
+"""Capa de servicios: entrena la red, la evalúa contra el baseline y guarda los resultados.
+Archivos pesados (modelo y gráficos) > artifacts/. Todo lo demás (álbumes, ajustes, épocas, métricas) > base de datos."""
 import time
+from datetime import datetime
 from types import SimpleNamespace
 
 import matplotlib
@@ -9,21 +10,30 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tensorflow import keras
 
-from config import (BATCH, DIM, K, LR, MAX_EPOCHS, MODELS_DIR, NEG_POWER, NEG_RATIO,
+from config import (ARTIFACTS_DIR, BATCH, DIM, K, LR, MAX_EPOCHS, NEG_POWER, NEG_RATIO,
                     PATIENCE, SEED)
-from model import build_model
-from services.data_service import DataService
-from services.evaluation_service import EvaluationService
-from services.recommendation_service import RecommendationService
+from daos.album_dao import AlbumDAO
+from daos.metric_dao import MetricDAO
+from daos.training_run_dao import TrainingRunDAO
+from domain.epoch_record import EpochRecord
+from domain.metric import Metric
+from domain.training_run import TrainingRun
+from ml.album_embedding_network import AlbumEmbeddingNetwork
+from services.album_recommendation_service import AlbumRecommendationService
+from services.ratings_dataset_service import RatingsDatasetService
+from services.recommendation_evaluation_service import RecommendationEvaluationService
 
-normalize = RecommendationService.normalize
-hit_rate_at_k = RecommendationService.hit_rate_at_k
+normalize = AlbumRecommendationService.normalize
+hit_rate_at_k = AlbumRecommendationService.hit_rate_at_k
 
 
-class TrainingService:
+class AlbumModelTrainingService:
 
-    def __init__(self):
-        self.evaluation = EvaluationService()
+    def __init__(self, album_dao=None, training_run_dao=None, metric_dao=None):
+        self.evaluation = RecommendationEvaluationService()
+        self.album_dao = album_dao or AlbumDAO()
+        self.training_run_dao = training_run_dao or TrainingRunDAO()
+        self.metric_dao = metric_dao or MetricDAO()
 
     def make_epoch(self, data, rng, neg_probs, neg_ratio):
         """Cada época: los datos reales + negativos nuevos sorteados."""
@@ -39,7 +49,7 @@ class TrainingService:
                     lr=LR, max_epochs=MAX_EPOCHS, patience=PATIENCE, k=K, seed=SEED, verbose=True):
         """Entrena con early stopping y deja el modelo con los pesos de la mejor época.
         La mejor época se elige con VALIDACIÓN (nunca con test).
-        Lo usan run() y ExperimentService."""
+        Lo usan run() y TrainingExperimentService."""
         keras.utils.set_random_seed(seed)
         rng = np.random.default_rng(seed)
 
@@ -47,7 +57,7 @@ class TrainingService:
         w = (data.popularity + 1.0) ** neg_power
         neg_probs = w / w.sum()
 
-        model = build_model(data.n_users, data.n_albums, dim, lr)
+        model = AlbumEmbeddingNetwork.build(data.n_users, data.n_albums, dim, lr)
         history = {"loss": [], "val_hit_rate": []}
         best_hr, best_epoch, best_weights, wait = -1.0, 0, None, 0
 
@@ -77,23 +87,22 @@ class TrainingService:
         return SimpleNamespace(model=model, history=history, best_hr=best_hr, best_epoch=best_epoch)
 
     def save_model_files(self, model, data):
-        MODELS_DIR.mkdir(exist_ok=True)
-        model.save(str(MODELS_DIR / "model.keras"))
-        with open(MODELS_DIR / "idx_to_album.json", "w", encoding="utf-8") as f:
-            json.dump(data.idx_to_album, f)
-        with open(MODELS_DIR / "album_to_idx.json", "w", encoding="utf-8") as f:
-            json.dump({a: i for i, a in enumerate(data.idx_to_album)}, f)
+        """El modelo va a artifacts/ (es pesado); qué álbum es cada posición va a la base."""
+        ARTIFACTS_DIR.mkdir(exist_ok=True)
+        model.save(str(ARTIFACTS_DIR / "model.keras"))
+        self.album_dao.save_vocabulary(data.idx_to_album)
 
     def save_plots(self, history, base_test, test_hr, rank_test):
+        ARTIFACTS_DIR.mkdir(exist_ok=True)
         fig, ax = plt.subplots(1, 2, figsize=(10, 4))
         ax[0].plot(history["loss"]); ax[0].set_title("Loss de entrenamiento"); ax[0].set_xlabel("época")
         ax[1].plot(history["val_hit_rate"]); ax[1].set_title("Hit rate@10 en validación"); ax[1].set_xlabel("época")
-        fig.tight_layout(); fig.savefig(MODELS_DIR / "training_curves.png", dpi=120); plt.close(fig)
+        fig.tight_layout(); fig.savefig(ARTIFACTS_DIR / "training_curves.png", dpi=120); plt.close(fig)
 
         fig, ax = plt.subplots(figsize=(5, 4))
         ax.bar(["Populares", "Red"], [base_test, test_hr], color=["gray", "tab:blue"])
         ax.set_title("Hit rate@10 en test"); ax.set_ylabel("hit rate")
-        fig.tight_layout(); fig.savefig(MODELS_DIR / "hit_rate_comparison.png", dpi=120); plt.close(fig)
+        fig.tight_layout(); fig.savefig(ARTIFACTS_DIR / "hit_rate_comparison.png", dpi=120); plt.close(fig)
 
         # Precision, recall y F1 lado a lado
         fig, ax = plt.subplots(figsize=(6, 4))
@@ -103,11 +112,11 @@ class TrainingService:
         ax.bar(x + 0.2, [rank_test["model"][n] for n in names], 0.4, label="Red", color="tab:blue")
         ax.set_xticks(x); ax.set_xticklabels(["precision@10", "recall@10", "F1@10"])
         ax.set_title("Métricas en test"); ax.legend()
-        fig.tight_layout(); fig.savefig(MODELS_DIR / "ranking_metrics.png", dpi=120); plt.close(fig)
+        fig.tight_layout(); fig.savefig(ARTIFACTS_DIR / "ranking_metrics.png", dpi=120); plt.close(fig)
 
     def run(self):
         """Entrenamiento completo: datos > entrenar > evaluar en test > guardar."""
-        data = DataService().build_data()
+        data = RatingsDatasetService().build_data()
         run = self.train_model(data)
         model, history, best_hr = run.model, run.history, run.best_hr
         emb_norm = normalize(model.get_layer("album_emb").get_weights()[0])
@@ -127,28 +136,30 @@ class TrainingService:
         print("\nTEST  | precision, recall y F1:")
         ev.print_table(rank_test, K)
 
-        # --- Guardar ---
+        # --- Guardar: archivos pesados > artifacts/, todo lo demás > base de datos ---
         self.save_model_files(model, data)
-        metrics = {
-            "hit_rate_at_10": {
-                "model_val": best_hr, "model_test": test_hr,
-                "baseline_val": base_val, "baseline_test": base_test,
-            },
-            "ranking_at_10": {
-                "val": rank_val, "test": rank_test,
-                "n_val_users_evaluated": int(len(data.val_inputs)),
-                "n_test_users_evaluated": int(len(data.test_inputs)),
-            },
-            "n_train_users": data.n_users, "n_albums": data.n_albums,
-            "n_val_users_evaluated": int(len(data.val_inputs)),
-            "n_test_users_evaluated": int(len(data.test_inputs)),
-            "epochs_run": len(history["loss"]),
-            "best_epoch": run.best_epoch,
-            "settings": {"dim": DIM, "batch": BATCH, "neg_ratio": NEG_RATIO, "neg_power": NEG_POWER, "lr": LR},
-            "history": history,
-            "baseline_top10_asins": top10,   # códigos para probar "recommend"
-        }
-        with open(MODELS_DIR / "metrics.json", "w", encoding="utf-8") as f:
-            json.dump(metrics, f, indent=2)
         self.save_plots(history, base_test, test_hr, rank_test)
-        print(f"Guardé modelo, diccionarios, metrics.json y gráficos en {MODELS_DIR}")
+
+        training_run = self.training_run_dao.insert(
+            TrainingRun(
+                dim=DIM, batch=BATCH, neg_ratio=NEG_RATIO, neg_power=NEG_POWER, lr=LR,
+                epochs_run=len(history["loss"]), best_epoch=run.best_epoch,
+                n_train_users=data.n_users, n_albums=data.n_albums,
+                n_val_users_evaluated=int(len(data.val_inputs)),
+                n_test_users_evaluated=int(len(data.test_inputs)),
+                run_date=datetime.now().strftime("%Y-%m-%d %H:%M")),
+            [EpochRecord(epoch=i, loss=loss, val_hit_rate=hr)
+             for i, (loss, hr) in enumerate(zip(history["loss"], history["val_hit_rate"]), 1)])
+
+        metrics = [
+            Metric(subset="val", source="model", name="hit_rate", value=best_hr, k=K),
+            Metric(subset="test", source="model", name="hit_rate", value=test_hr, k=K),
+            Metric(subset="val", source="baseline", name="hit_rate", value=base_val, k=K),
+            Metric(subset="test", source="baseline", name="hit_rate", value=base_test, k=K),
+        ]
+        metrics += ev.to_metrics("val", rank_val, K) + ev.to_metrics("test", rank_test, K)
+        self.metric_dao.save_all(training_run.id, metrics)
+
+        print(f"\nCódigos de los 10 más populares (para probar 'recommend'): {' '.join(top10)}")
+        print(f"Guardé el modelo y los gráficos en {ARTIFACTS_DIR}")
+        print(f"Guardé los álbumes, ajustes, épocas y métricas en la base (entrenamiento #{training_run.id}).")

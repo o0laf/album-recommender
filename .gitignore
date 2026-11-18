@@ -7,4 +7,5 @@ venv/
 .venv/
 __pycache__/
 *.pyc
-models/*.keras
+data/*.db
+artifacts/*.keras

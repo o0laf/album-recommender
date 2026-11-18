@@ -1,18 +1,24 @@
 """Capa de servicios: mide cuántos álbumes de Vynl se pueden encontrar en el modelo (por título + artista).
-Necesita: models/album_to_idx.json (lo crea el entrenamiento) y data/metadata/meta_CDs_and_Vinyl.json.gz"""
-import csv
+Necesita: los álbumes del modelo en la base (los guarda el entrenamiento) y data/metadata/meta_CDs_and_Vinyl.json.gz.
+El resultado queda en la tabla `vynl_coverage`."""
 import gzip
 import html
 import json
 import re
 import sqlite3
 import unicodedata
-from pathlib import Path
 
-from config import META_PATH, MODELS_DIR
+from config import META_PATH
+from daos.album_dao import AlbumDAO
+from daos.vynl_coverage_dao import VynlCoverageDAO
+from domain.vynl_coverage_entry import VynlCoverageEntry
 
 
-class CoverageService:
+class VynlCoverageService:
+
+    def __init__(self, album_dao=None, coverage_dao=None):
+        self.album_dao = album_dao or AlbumDAO()
+        self.coverage_dao = coverage_dao or VynlCoverageDAO()
 
     @staticmethod
     def norm(text):
@@ -25,20 +31,25 @@ class CoverageService:
         text = re.sub(r"\b(deluxe|remastered|edition|expanded|explicit)\b", " ", text)
         return " ".join(text.split())
 
-    def run(self, sqlite_path, meta=META_PATH, model_albums=MODELS_DIR / "album_to_idx.json",
-            out=MODELS_DIR / "coverage.csv"):
+    def run(self, sqlite_path, meta=META_PATH):
         norm = self.norm
 
         # 1) Álbumes de Vynl (solo lectura)
         db = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
-        vynl = db.execute(
-            "SELECT a.id, a.title, ar.name FROM albums a JOIN artists ar ON ar.id = a.artist_id"
-        ).fetchall()
+        try:
+            vynl = db.execute(
+                "SELECT a.id, a.title, ar.name FROM albums a JOIN artists ar ON ar.id = a.artist_id"
+            ).fetchall()
+        finally:
+            db.close()
+        if not vynl:
+            raise SystemExit("La base de Vynl no tiene álbumes.")
         wanted = {(norm(t), norm(n)) for _, t, n in vynl}
 
         # 2) Códigos que el modelo conoce
-        with open(model_albums, encoding="utf-8") as f:
-            in_model = set(json.load(f))
+        in_model = {a.asin for a in self.album_dao.find_all_in_model()}
+        if not in_model:
+            raise SystemExit("La base no tiene los álbumes del modelo. Corré primero 'python main.py train'.")
 
         # 3) Recorrer la metadata y quedarme solo con lo que Vynl busca
         found = {}      # (título, artista) normalizados -> lista de asins
@@ -53,19 +64,13 @@ class CoverageService:
                     found.setdefault(key, []).append(asin)
 
         # 4) Resultado
-        rows, hits = [], 0
-        for vid, title, artist in vynl:
-            asins = found.get((norm(title), norm(artist)), [])
-            hits += bool(asins)
-            rows.append([vid, title, artist, " ".join(asins)])
-
-        Path(out).parent.mkdir(exist_ok=True)
-        with open(out, "w", newline="", encoding="utf-8-sig") as f:   # utf-8-sig: Excel lo abre bien
-            w = csv.writer(f)
-            w.writerow(["vynl_album_id", "titulo", "artista", "asins_encontrados"])
-            w.writerows(rows)
+        entries = [VynlCoverageEntry(vynl_album_id=str(vid), title=title, artist=artist,
+                                     asins=found.get((norm(title), norm(artist)), []))
+                   for vid, title, artist in vynl]
+        hits = sum(e.found for e in entries)
+        self.coverage_dao.replace_all(entries)
 
         print(f"Álbumes de Vynl encontrados en el modelo: {hits} de {len(vynl)} ({hits / len(vynl):.0%})")
         print("Veredicto:", "vale la pena integrarlo" if hits / len(vynl) >= 0.5
               else "cobertura baja: mejor dejarlo como prototipo")
-        print(f"Detalle en {out}")
+        print("Detalle guardado en la base (tabla vynl_coverage).")

@@ -1,20 +1,22 @@
 """Capa de servicios: la lógica de recomendar (promediar vectores, buscar vecinos, filtrar)."""
 import html
-import json
 import re
 import unicodedata
 from types import SimpleNamespace
 
 import numpy as np
 
-from config import (BAD_FRAGMENTS, CANDIDATE_FACTOR, DEDUPE_EDITIONS, MODELS_DIR)
+from config import ARTIFACTS_DIR, BAD_FRAGMENTS, CANDIDATE_FACTOR, DEDUPE_EDITIONS
+from daos.album_dao import AlbumDAO
+from domain.recommendation import Recommendation
 
 
-class RecommendationService:
+class AlbumRecommendationService:
     """Cargar el modelo (tarda) y recomendar. Las funciones matemáticas son estáticas:
     el entrenamiento y la evaluación las usan sin necesidad de cargar nada."""
 
-    def __init__(self):
+    def __init__(self, album_dao=None):
+        self.album_dao = album_dao or AlbumDAO()
         self.art = self.load_artifacts()
 
     # ---------- Matemática (no necesita modelo cargado) ----------
@@ -28,7 +30,7 @@ class RecommendationService:
     @staticmethod
     def recommend_from_indices(emb_norm, idxs, k=10):
         """Promedia los vectores de los álbumes dados y busca los más cercanos."""
-        query = RecommendationService.normalize(emb_norm[idxs].mean(axis=0))
+        query = AlbumRecommendationService.normalize(emb_norm[idxs].mean(axis=0))
         scores = emb_norm @ query
         scores[idxs] = -np.inf                       # excluir los que ya puso
         top = np.argpartition(scores, -k)[-k:]       # los k mejores (sin ordenar)
@@ -42,7 +44,7 @@ class RecommendationService:
         for start in range(0, len(inputs), batch):      # por tandas, para no llenar la RAM
             ins = inputs[start:start + batch]
             tg = targets[start:start + batch]
-            q = RecommendationService.normalize(emb_norm[ins].mean(axis=1))   # promedio de los 4 álbumes
+            q = AlbumRecommendationService.normalize(emb_norm[ins].mean(axis=1))   # promedio de los 4 álbumes
             scores = q @ emb_norm.T
             scores[np.arange(len(ins))[:, None], ins] = -np.inf   # excluir los 4 dados
             top = np.argpartition(scores, -k, axis=1)[:, -k:]
@@ -52,16 +54,23 @@ class RecommendationService:
     # ---------- Carga del modelo ----------
 
     def load_artifacts(self):
+        """El modelo se lee de artifacts/model.keras; los códigos y títulos de los álbumes, de la base."""
+        model_path = ARTIFACTS_DIR / "model.keras"
+        if not model_path.exists():
+            raise SystemExit(f"No encuentro {model_path}. Corré primero: python main.py train")
+        albums = self.album_dao.find_all_in_model()
+        if not albums:
+            raise SystemExit("La base no tiene los álbumes del modelo. Corré 'python main.py train' "
+                             "(o 'python main.py import-legacy' si ya tenías los archivos .json).")
+
         from tensorflow import keras   # import acá adentro: tarda en cargar
-        model = keras.models.load_model(MODELS_DIR / "model.keras")
+        model = keras.models.load_model(model_path)
         emb = model.get_layer("album_emb").get_weights()[0]
-        with open(MODELS_DIR / "idx_to_album.json", encoding="utf-8") as f:
-            idx_to_album = json.load(f)
-        titles = {}
-        titles_path = MODELS_DIR / "album_titles.json"    # existe solo si corriste "names"
-        if titles_path.exists():
-            with open(titles_path, encoding="utf-8") as f:
-                titles = json.load(f)
+        if emb.shape[0] != len(albums):
+            raise SystemExit(f"El modelo tiene {emb.shape[0]} álbumes y la base {len(albums)}: no son del "
+                             "mismo entrenamiento. Volvé a correr 'python main.py train'.")
+        idx_to_album = [a.asin for a in albums]
+        titles = {a.asin: a.title for a in albums if a.title}    # hay títulos solo si corriste "names"
         return SimpleNamespace(
             emb_norm=self.normalize(emb),
             idx_to_album=idx_to_album,
@@ -129,7 +138,7 @@ class RecommendationService:
     # ---------- Lo que usan los controladores ----------
 
     def recommend(self, codes, k=10):
-        """Devuelve (códigos que no conozco, lista de recomendaciones)."""
+        """Devuelve (códigos que no conozco, lista de Recommendation)."""
         art = self.art
         idxs, unknown = [], []
         for c in codes:
@@ -146,7 +155,7 @@ class RecommendationService:
         candidates = self.recommend_from_indices(art.emb_norm, idxs, n_cand)
         recs = self.filter_candidates(candidates, idxs, k)
         return unknown, [
-            {"asin": art.idx_to_album[i], "title": art.titles.get(art.idx_to_album[i], ""), "score": sc}
+            Recommendation(asin=art.idx_to_album[i], title=art.titles.get(art.idx_to_album[i], ""), score=sc)
             for i, sc in recs
         ]
 
@@ -158,4 +167,4 @@ class RecommendationService:
         if not recs:
             raise SystemExit("No hay ningún álbum válido para recomendar.")
         for n, r in enumerate(recs, 1):
-            print(f"{n:2d}. {r['asin']}  {r['title']}  (similitud {r['score']:.3f})")
+            print(f"{n:2d}. {r.asin}  {r.title}  (similitud {r.score:.3f})")
