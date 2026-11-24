@@ -10,8 +10,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tensorflow import keras
 
-from config import (ARTIFACTS_DIR, BATCH, DIM, K, LR, MAX_EPOCHS, NEG_POWER, NEG_RATIO,
-                    PATIENCE, SEED)
+from config import (ARTIFACTS_DIR, EMBEDDING_DIMENSION, LEARNING_RATE, MAX_EPOCHS,
+                    NEGATIVE_SAMPLE_RATIO, NEGATIVE_SAMPLING_POWER, PATIENCE,
+                    RECOMMENDATION_COUNT, SEED, TRAINING_BATCH_SIZE)
 from daos.album_dao import AlbumDAO
 from daos.metric_dao import MetricDAO
 from daos.training_run_dao import TrainingRunDAO
@@ -45,8 +46,10 @@ class AlbumModelTrainingService:
         labels = np.concatenate([data.train_labels, np.zeros(len(neg_users), dtype=np.float32)])
         return users.reshape(-1, 1), albums.reshape(-1, 1), labels
 
-    def train_model(self, data, dim=DIM, batch=BATCH, neg_ratio=NEG_RATIO, neg_power=NEG_POWER,
-                    lr=LR, max_epochs=MAX_EPOCHS, patience=PATIENCE, k=K, seed=SEED, verbose=True):
+    def train_model(self, data, dim=EMBEDDING_DIMENSION, batch=TRAINING_BATCH_SIZE,
+                    neg_ratio=NEGATIVE_SAMPLE_RATIO, neg_power=NEGATIVE_SAMPLING_POWER,
+                    lr=LEARNING_RATE, max_epochs=MAX_EPOCHS, patience=PATIENCE,
+                    k=RECOMMENDATION_COUNT, seed=SEED, verbose=True):
         """Entrena con early stopping y deja el modelo con los pesos de la mejor época.
         La mejor época se elige con VALIDACIÓN (nunca con test).
         Lo usan run() y TrainingExperimentService."""
@@ -62,7 +65,7 @@ class AlbumModelTrainingService:
         best_hr, best_epoch, best_weights, wait = -1.0, 0, None, 0
 
         for epoch in range(1, max_epochs + 1):
-            t0 = time.time()
+            start_time = time.time()
             users, albums, labels = self.make_epoch(data, rng, neg_probs, neg_ratio)
             h = model.fit([users, albums], labels, batch_size=batch, epochs=1, shuffle=True, verbose=0)
             loss = float(h.history["loss"][0])
@@ -72,7 +75,8 @@ class AlbumModelTrainingService:
             history["loss"].append(loss)
             history["val_hit_rate"].append(val_hr)
             if verbose:
-                print(f"Época {epoch:2d} | loss {loss:.4f} | hit rate@{k} validación {val_hr:.4f} | {time.time() - t0:.0f}s")
+                elapsed_seconds = time.time() - start_time
+                print(f"Época {epoch:2d} | loss {loss:.4f} | hit rate@{k} validación {val_hr:.4f} | {elapsed_seconds:.0f}s")
 
             if val_hr > best_hr:
                 best_hr, best_epoch, best_weights, wait = val_hr, epoch, model.get_weights(), 0
@@ -123,18 +127,18 @@ class AlbumModelTrainingService:
         ev = self.evaluation
 
         # --- Evaluación final en test (usuarios que la red nunca vio) ---
-        test_hr = hit_rate_at_k(emb_norm, data.test_inputs, data.test_targets, K)
-        base_val = ev.baseline_hit_rate(data.popularity, data.val_inputs, data.val_targets, K)
-        base_test = ev.baseline_hit_rate(data.popularity, data.test_inputs, data.test_targets, K)
-        top10 = [data.idx_to_album[i] for i in ev.popular_ranking(data.popularity)[:K]]
+        test_hr = hit_rate_at_k(emb_norm, data.test_inputs, data.test_targets, RECOMMENDATION_COUNT)
+        base_val = ev.baseline_hit_rate(data.popularity, data.val_inputs, data.val_targets, RECOMMENDATION_COUNT)
+        base_test = ev.baseline_hit_rate(data.popularity, data.test_inputs, data.test_targets, RECOMMENDATION_COUNT)
+        top10 = [data.idx_to_album[i] for i in ev.popular_ranking(data.popularity)[:RECOMMENDATION_COUNT]]
 
-        print(f"\nTEST  | hit rate@{K} | red: {test_hr:.4f} | baseline populares: {base_test:.4f}")
+        print(f"\nTEST  | hit rate@{RECOMMENDATION_COUNT} | red: {test_hr:.4f} | baseline populares: {base_test:.4f}")
 
         # Precision / recall / F1 en validación y en test
-        rank_val = ev.evaluate_ranking(emb_norm, data.popularity, data.val_inputs, data.val_relevant, K)
-        rank_test = ev.evaluate_ranking(emb_norm, data.popularity, data.test_inputs, data.test_relevant, K)
+        rank_val = ev.evaluate_ranking(emb_norm, data.popularity, data.val_inputs, data.val_relevant, RECOMMENDATION_COUNT)
+        rank_test = ev.evaluate_ranking(emb_norm, data.popularity, data.test_inputs, data.test_relevant, RECOMMENDATION_COUNT)
         print("\nTEST  | precision, recall y F1:")
-        ev.print_table(rank_test, K)
+        ev.print_table(rank_test, RECOMMENDATION_COUNT)
 
         # --- Guardar: archivos pesados > artifacts/, todo lo demás > base de datos ---
         self.save_model_files(model, data)
@@ -142,7 +146,9 @@ class AlbumModelTrainingService:
 
         training_run = self.training_run_dao.insert(
             TrainingRun(
-                dim=DIM, batch=BATCH, neg_ratio=NEG_RATIO, neg_power=NEG_POWER, lr=LR,
+                dim=EMBEDDING_DIMENSION, batch=TRAINING_BATCH_SIZE,
+                neg_ratio=NEGATIVE_SAMPLE_RATIO, neg_power=NEGATIVE_SAMPLING_POWER,
+                lr=LEARNING_RATE,
                 epochs_run=len(history["loss"]), best_epoch=run.best_epoch,
                 n_train_users=data.n_users, n_albums=data.n_albums,
                 n_val_users_evaluated=int(len(data.val_inputs)),
@@ -152,12 +158,12 @@ class AlbumModelTrainingService:
              for i, (loss, hr) in enumerate(zip(history["loss"], history["val_hit_rate"]), 1)])
 
         metrics = [
-            Metric(subset="val", source="model", name="hit_rate", value=best_hr, k=K),
-            Metric(subset="test", source="model", name="hit_rate", value=test_hr, k=K),
-            Metric(subset="val", source="baseline", name="hit_rate", value=base_val, k=K),
-            Metric(subset="test", source="baseline", name="hit_rate", value=base_test, k=K),
+            Metric(subset="val", source="model", name="hit_rate", value=best_hr, k=RECOMMENDATION_COUNT),
+            Metric(subset="test", source="model", name="hit_rate", value=test_hr, k=RECOMMENDATION_COUNT),
+            Metric(subset="val", source="baseline", name="hit_rate", value=base_val, k=RECOMMENDATION_COUNT),
+            Metric(subset="test", source="baseline", name="hit_rate", value=base_test, k=RECOMMENDATION_COUNT),
         ]
-        metrics += ev.to_metrics("val", rank_val, K) + ev.to_metrics("test", rank_test, K)
+        metrics += ev.to_metrics("val", rank_val, RECOMMENDATION_COUNT) + ev.to_metrics("test", rank_test, RECOMMENDATION_COUNT)
         self.metric_dao.save_all(training_run.id, metrics)
 
         print(f"\nCódigos de los 10 más populares (para probar 'recommend'): {' '.join(top10)}")

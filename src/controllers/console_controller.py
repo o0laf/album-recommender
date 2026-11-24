@@ -14,7 +14,6 @@ class ConsoleController:
             "names": self.names,
             "recommend": self.recommend,
             "server": self.server,
-            "coverage": self.coverage,
             "import-legacy": self.import_legacy,
         }
         handlers[args.command](args)
@@ -38,7 +37,10 @@ class ConsoleController:
     def experiments(self, args):
         from config import MAX_EPOCHS
         from services.training_experiment_service import TrainingExperimentService
-        TrainingExperimentService().run(solo=args.solo, max_epochs=args.max_epochs or MAX_EPOCHS)
+        max_epochs = args.max_epochs or MAX_EPOCHS
+        if max_epochs < 1:
+            raise SystemExit("La opción --max-epochs debe ser al menos 1.")
+        TrainingExperimentService().run(solo=args.solo, max_epochs=max_epochs)
 
     def names(self, args):
         from services.album_catalog_service import AlbumCatalogService
@@ -51,10 +53,6 @@ class ConsoleController:
     def server(self, args):
         from controllers.recommendation_web_controller import RecommendationWebController
         RecommendationWebController().run()
-
-    def coverage(self, args):
-        from services.vynl_coverage_service import VynlCoverageService
-        VynlCoverageService().run(args.sqlite)
 
     def import_legacy(self, args):
         from services.legacy_artifacts_import_service import LegacyArtifactsImportService

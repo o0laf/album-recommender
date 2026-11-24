@@ -68,12 +68,6 @@ CREATE TABLE IF NOT EXISTS experiment (
     minutes          REAL    NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS vynl_coverage (
-    vynl_album_id TEXT PRIMARY KEY,
-    title         TEXT,
-    artist        TEXT,
-    matched_asins TEXT NOT NULL DEFAULT ''   -- códigos separados por espacio; vacío = no está en el modelo
-);
 """
 
 

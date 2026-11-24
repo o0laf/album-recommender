@@ -54,16 +54,18 @@ class AlbumCatalogService:
         if not wanted:
             raise SystemExit("La base no tiene los álbumes del modelo. Corré primero 'python main.py train' "
                              "(o 'python main.py import-legacy').")
+        if not META_PATH.exists():
+            raise SystemExit(f"No encuentro el archivo de metadata: {META_PATH}")
 
         titles = {}
         with gzip.open(META_PATH, "rt", encoding="utf-8") as f:
             for n, line in enumerate(f, 1):
-                r = json.loads(line)
-                asin = r.get("asin")
+                metadata = json.loads(line)
+                asin = metadata.get("asin")
                 if asin not in wanted:
                     continue
-                title = html.unescape((r.get("title") or "").strip())
-                artist = html.unescape((r.get("brand") or "").strip())
+                title = html.unescape((metadata.get("title") or "").strip())
+                artist = html.unescape((metadata.get("brand") or "").strip())
                 if not title or len(title) > 150:   # a veces el título viene con basura
                     continue
                 titles[asin] = f"{title} - {artist}" if artist else title

@@ -3,13 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Vynl - Recomendador de álbumes</title>
-  <!-- La fuente de Vynl (Instrument Sans). Si no hay internet, usa la del sistema. -->
+  <title>Recomendador de álbumes</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    /* Colores y medidas del diseño de Vynl: para cambiar el estilo se tocan solo estas líneas */
+    /* Colores y medidas del diseño: para cambiar el estilo se tocan solo estas líneas */
     :root {
       --blue: #478DD4;
       --blue-dark: #3578BF;
@@ -96,7 +95,7 @@
 </head>
 <body>
   <main>
-    <div class="brand"><span class="dot"></span>vynl</div>
+    <div class="brand"><span class="dot"></span>Recomendador de álbumes</div>
 
     <h1>Descubrí tu próximo álbum</h1>
     <p class="lead">Buscá de 1 a 4 álbumes que te gusten, elegilos de la lista y te recomendamos 10 parecidos.</p>
@@ -122,12 +121,14 @@
     const results = document.getElementById("results");
     const resultsTitle = document.getElementById("results-title");
     const goBtn = document.getElementById("go");
-    const chosen = {};      // id de la casilla -> { asin, title } del álbum elegido
+    const chosenAlbums = {}; // id de la casilla -> { asin, title } del álbum elegido
 
     // Los títulos vienen como "Título - Artista": separo en dos para mostrarlos mejor
-    function splitTitle(full) {
-      const i = full.lastIndexOf(" - ");
-      return i > 0 ? [full.slice(0, i), full.slice(i + 3)] : [full, ""];
+    function splitTitle(fullTitle) {
+      const separatorIndex = fullTitle.lastIndexOf(" - ");
+      return separatorIndex > 0
+        ? [fullTitle.slice(0, separatorIndex), fullTitle.slice(separatorIndex + 3)]
+        : [fullTitle, ""];
     }
 
     // ---- Búsqueda por nombre ----
@@ -137,28 +138,28 @@
       let timer = null;
 
       input.addEventListener("input", () => {
-        delete chosen[input.id];           // si escribe de nuevo, se borra lo elegido
+        delete chosenAlbums[input.id];     // si escribe de nuevo, se borra lo elegido
         input.classList.remove("ok");
         clearTimeout(timer);
-        const q = input.value.trim();
-        if (q.length < 2) { list.innerHTML = ""; return; }
+        const searchQuery = input.value.trim();
+        if (searchQuery.length < 2) { list.innerHTML = ""; return; }
         timer = setTimeout(async () => {   // espera 250 ms a que termine de escribir
           try {
-            const data = await (await fetch("/search?q=" + encodeURIComponent(q))).json();
+            const data = await (await fetch("/search?q=" + encodeURIComponent(searchQuery))).json();
             list.innerHTML = "";
             data.results.forEach(r => {
-              const [t, a] = splitTitle(r.title);
+              const [title, artistName] = splitTitle(r.title);
               const li = document.createElement("li");
-              li.textContent = t;
-              if (a) {
-                const sp = document.createElement("span");
-                sp.className = "artist";
-                sp.textContent = " · " + a;
-                li.appendChild(sp);
+              li.textContent = title;
+              if (artistName) {
+                const artistLabel = document.createElement("span");
+                artistLabel.className = "artist";
+                artistLabel.textContent = " · " + artistName;
+                li.appendChild(artistLabel);
               }
               li.addEventListener("click", () => {
                 input.value = r.title;
-                chosen[input.id] = r;
+                chosenAlbums[input.id] = r;
                 input.classList.add("ok");
                 list.innerHTML = "";
               });
@@ -185,7 +186,7 @@
         const text = document.getElementById(id).value.trim();
         if (!text) continue;
         // Si lo eligió de la lista usamos su código; si pegó un código (ej. B000002IQ1) también anda
-        if (chosen[id]) albums.push(chosen[id].asin);
+        if (chosenAlbums[id]) albums.push(chosenAlbums[id].asin);
         else if (/^[A-Za-z0-9]{10}$/.test(text)) albums.push(text);
         else {
           msg.className = "error";

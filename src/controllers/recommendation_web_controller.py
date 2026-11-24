@@ -39,9 +39,9 @@ class RecommendationWebController:
                 if url.path in ("/", "/index.html"):
                     self._send(200, controller.html, "text/html; charset=utf-8")
                 elif url.path == "/search":
-                    q = parse_qs(url.query).get("q", [""])[0]
+                    search_query = parse_qs(url.query).get("q", [""])[0]
                     self._json(200, {"enabled": controller.catalog.enabled,
-                                     "results": controller.catalog.search(q)})
+                                     "results": controller.catalog.search(search_query)})
                 else:
                     self._json(404, {"error": "No encontrado"})
 
@@ -50,6 +50,8 @@ class RecommendationWebController:
                     return self._json(404, {"error": "No encontrado"})
                 try:
                     length = int(self.headers.get("Content-Length", 0))
+                    if length < 1 or length > 1_000_000:
+                        return self._json(400, {"error": "Pedido inválido"})
                     body = json.loads(self.rfile.read(length).decode("utf-8"))
                     codes = [str(c).strip() for c in body.get("albums", []) if str(c).strip()][:20]
                 except Exception:

@@ -12,20 +12,20 @@ ARTIFACTS_DIR = ROOT / "artifacts"                  # archivos pesados del entre
 VIEWS_DIR = SRC_DIR / "views"
 
 # --- Datos ---
-LIKE_THRESHOLD = 4     # 4 o 5 estrellas = le gustó
-N_INPUT = 4            # álbumes que le damos a cada usuario en la evaluación
-VAL_FRACTION = 0.10
+LIKE_RATING_THRESHOLD = 4     # 4 o 5 estrellas = le gustó
+EVALUATION_INPUT_COUNT = 4    # álbumes que le damos a cada usuario en la evaluación
+VALIDATION_FRACTION = 0.10
 TEST_FRACTION = 0.10
 
 # --- Entrenamiento ---
-DIM = 32            # largo de cada embedding
-BATCH = 4096
-NEG_RATIO = 4       # negativos inventados por cada "me gusta"
-NEG_POWER = 0.75    # 0 = negativos totalmente al azar; 0.75 = más a menudo los populares
-LR = 0.003          # learning rate (qué tan grande es cada paso al aprender)
+EMBEDDING_DIMENSION = 32      # largo de cada embedding
+TRAINING_BATCH_SIZE = 4096
+NEGATIVE_SAMPLE_RATIO = 4     # negativos inventados por cada "me gusta"
+NEGATIVE_SAMPLING_POWER = 0.75 # 0 = totalmente al azar; 0.75 = más a menudo los populares
+LEARNING_RATE = 0.003
 MAX_EPOCHS = 20
 PATIENCE = 3        # corta si la validación no mejora en 3 épocas
-K = 10              # cuántas recomendaciones se piden
+RECOMMENDATION_COUNT = 10     # cuántas recomendaciones se piden
 SEED = 42
 
 # --- Recomendación ---

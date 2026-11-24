@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from config import (CACHE_PATH, DATA_PATH, LIKE_THRESHOLD, N_INPUT, SEED,
-                    TEST_FRACTION, VAL_FRACTION)
+from config import (CACHE_PATH, DATA_PATH, LIKE_RATING_THRESHOLD, EVALUATION_INPUT_COUNT, SEED,
+                    TEST_FRACTION, VALIDATION_FRACTION)
 
 
 class RatingsDatasetService:
@@ -20,46 +20,53 @@ class RatingsDatasetService:
             return c["users"], c["albums"], c["stars"]
 
         users, albums, stars = [], [], []
-        t0 = time.time()
+        start_time = time.time()
         # "rt" + utf-8: lee el .gz como texto sin descomprimirlo a disco
         with gzip.open(DATA_PATH, "rt", encoding="utf-8") as f:
             for n, line in enumerate(f, 1):
-                r = json.loads(line)  # un JSON por línea
-                users.append(r["reviewerID"])
-                albums.append(r["asin"])
-                stars.append(int(r["overall"]))
+                rating = json.loads(line)
+                users.append(rating["reviewerID"])
+                albums.append(rating["asin"])
+                stars.append(int(rating["overall"]))
                 if n % 200_000 == 0:
-                    print(f"  {n:,} líneas leídas ({time.time() - t0:.0f}s)")
+                    elapsed_seconds = time.time() - start_time
+                    print(f"  {n:,} líneas leídas ({elapsed_seconds:.0f}s)")
 
         users = np.array(users)
         albums = np.array(albums)
         stars = np.array(stars, dtype=np.int8)
         np.savez_compressed(CACHE_PATH, users=users, albums=albums, stars=stars)
-        print(f"Lectura lista en {time.time() - t0:.0f}s. Guardé un caché para la próxima.")
+        elapsed_seconds = time.time() - start_time
+        print(f"Lectura lista en {elapsed_seconds:.0f}s. Guardé un caché para la próxima.")
         return users, albums, stars
 
-    def make_eval_set(self, u, a, s, row_split, which, old_to_new, rng):
-        """Para cada usuario de test/val: N_INPUT álbumes que le gustaron (entrada),
+    def make_eval_set(self, users, album_indices, ratings, row_split, split_name, old_to_new, rng):
+        """Para cada usuario de test/val: EVALUATION_INPUT_COUNT álbumes que le gustaron (entrada),
         1 más que también le gustó (escondido, para el hit rate) y la lista de TODOS
         los que le gustaron y no se dieron como entrada (para precision / recall / F1)."""
-        mask = (row_split == which) & (s >= LIKE_THRESHOLD)
-        eu = u[mask]
-        ea = old_to_new[a[mask]]
-        keep = ea >= 0                      # solo álbumes que el modelo conoce
-        eu, ea = eu[keep], ea[keep]
+        mask = (row_split == split_name) & (ratings >= LIKE_RATING_THRESHOLD)
+        evaluation_users = users[mask]
+        evaluation_albums = old_to_new[album_indices[mask]]
+        keep = evaluation_albums >= 0       # solo álbumes que el modelo conoce
+        evaluation_users = evaluation_users[keep]
+        evaluation_albums = evaluation_albums[keep]
 
-        order = np.argsort(eu, kind="stable")   # agrupar por usuario
-        eu, ea = eu[order], ea[order]
-        groups = np.split(ea, np.flatnonzero(np.diff(eu)) + 1)
+        order = np.argsort(evaluation_users, kind="stable")   # agrupar por usuario
+        evaluation_users = evaluation_users[order]
+        evaluation_albums = evaluation_albums[order]
+        groups = np.split(
+            evaluation_albums,
+            np.flatnonzero(np.diff(evaluation_users)) + 1,
+        )
 
         inputs, targets, relevants = [], [], []
         for g in groups:
-            if len(g) < N_INPUT + 1:        # muy pocos favoritos: no se evalúa
+            if len(g) < EVALUATION_INPUT_COUNT + 1:        # muy pocos favoritos: no se evalúa
                 continue
             perm = rng.permutation(g)
-            inputs.append(perm[:N_INPUT])
-            targets.append(perm[N_INPUT])
-            relevants.append(perm[N_INPUT:].astype(np.int64))   # el escondido + los demás que le gustaron
+            inputs.append(perm[:EVALUATION_INPUT_COUNT])
+            targets.append(perm[EVALUATION_INPUT_COUNT])
+            relevants.append(perm[EVALUATION_INPUT_COUNT:].astype(np.int64))
         return np.array(inputs, dtype=np.int64), np.array(targets, dtype=np.int64), relevants
 
     def build_data(self):
@@ -78,7 +85,7 @@ class RatingsDatasetService:
         rng = np.random.default_rng(SEED)
         n_all_users = int(u.max()) + 1
         perm = rng.permutation(n_all_users)
-        n_val = int(VAL_FRACTION * n_all_users)
+        n_val = int(VALIDATION_FRACTION * n_all_users)
         n_test = int(TEST_FRACTION * n_all_users)
         split = np.zeros(n_all_users, dtype=np.int8)       # 0 = train
         split[perm[:n_val]] = 1                            # 1 = validación
@@ -95,7 +102,7 @@ class RatingsDatasetService:
         train_albums = old_to_new[tr_a].astype(np.int32)
         _, train_users = np.unique(tr_u, return_inverse=True)
         train_users = train_users.astype(np.int32)
-        train_labels = (tr_s >= LIKE_THRESHOLD).astype(np.float32)
+        train_labels = (tr_s >= LIKE_RATING_THRESHOLD).astype(np.float32)
 
         n_users = int(train_users.max()) + 1
         n_albums = len(train_albums_old)
@@ -107,7 +114,7 @@ class RatingsDatasetService:
         test_inputs, test_targets, test_relevant = self.make_eval_set(u, a, s, row_split, 2, old_to_new, rng)
 
         print(f"Calificaciones únicas: {len(u):,} | usuarios: {n_all_users:,} | álbumes: {len(asins):,}")
-        print(f"Le gustó (4-5 estrellas): {(s >= LIKE_THRESHOLD).mean():.1%}")
+        print(f"Le gustó (4-5 estrellas): {(s >= LIKE_RATING_THRESHOLD).mean():.1%}")
         print(f"Train: {n_users:,} usuarios, {n_albums:,} álbumes, {len(train_users):,} calificaciones")
         print(f"Usuarios evaluables -> validación: {len(val_inputs):,} | test: {len(test_inputs):,}")
 

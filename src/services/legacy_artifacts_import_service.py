@@ -11,7 +11,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from config import ARTIFACTS_DIR, BATCH, DIM, LR, NEG_POWER, NEG_RATIO
+from config import (ARTIFACTS_DIR, EMBEDDING_DIMENSION, TRAINING_BATCH_SIZE,
+                    LEARNING_RATE, NEGATIVE_SAMPLING_POWER, NEGATIVE_SAMPLE_RATIO)
 from daos.album_dao import AlbumDAO
 from daos.experiment_dao import ExperimentDAO
 from daos.metric_dao import MetricDAO
@@ -67,20 +68,25 @@ class LegacyArtifactsImportService:
         path = self.folder / "experiments.csv"
         if not path.exists():
             return False
-        ya_estan = self.experiment_dao.find_names()
+        existing_names = self.experiment_dao.find_names()
         nuevos = 0
         with open(path, newline="", encoding="utf-8-sig") as f:
-            for r in csv.DictReader(f):
-                if r["nombre"] in ya_estan:
+            for experiment_row in csv.DictReader(f):
+                if experiment_row["nombre"] in existing_names:
                     continue
                 self.experiment_dao.insert(Experiment(
-                    name=r["nombre"], run_date=r["fecha"],
-                    dim=int(r["dim"]), batch=int(r["batch"]), neg_ratio=int(r["neg_ratio"]),
-                    neg_power=float(r["neg_power"]), lr=float(r["lr"]),
-                    epochs_run=int(r["epocas"]), best_epoch=int(r["mejor_epoca"]),
-                    val_hit10=float(r["val_hit10"]), test_hit10=float(r["test_hit10"]),
-                    test_precision10=float(r["test_precision10"]), test_recall10=float(r["test_recall10"]),
-                    test_f1_10=float(r["test_f1_10"]), minutes=float(r["minutos"])))
+                    name=experiment_row["nombre"], run_date=experiment_row["fecha"],
+                    dim=int(experiment_row["dim"]), batch=int(experiment_row["batch"]),
+                    neg_ratio=int(experiment_row["neg_ratio"]),
+                    neg_power=float(experiment_row["neg_power"]), lr=float(experiment_row["lr"]),
+                    epochs_run=int(experiment_row["epocas"]),
+                    best_epoch=int(experiment_row["mejor_epoca"]),
+                    val_hit10=float(experiment_row["val_hit10"]),
+                    test_hit10=float(experiment_row["test_hit10"]),
+                    test_precision10=float(experiment_row["test_precision10"]),
+                    test_recall10=float(experiment_row["test_recall10"]),
+                    test_f1_10=float(experiment_row["test_f1_10"]),
+                    minutes=float(experiment_row["minutos"])))
                 nuevos += 1
         print(f"Experimentos: {nuevos} importados.")
         return True
@@ -103,9 +109,11 @@ class LegacyArtifactsImportService:
                   for i, (loss, hr) in enumerate(zip(history.get("loss", []), history.get("val_hit_rate", [])), 1)]
         run = self.training_run_dao.insert(
             TrainingRun(
-                dim=int(s.get("dim", DIM)), batch=int(s.get("batch", BATCH)),
-                neg_ratio=int(s.get("neg_ratio", NEG_RATIO)), neg_power=float(s.get("neg_power", NEG_POWER)),
-                lr=float(s.get("lr", LR)),
+                dim=int(s.get("dim", EMBEDDING_DIMENSION)),
+                batch=int(s.get("batch", TRAINING_BATCH_SIZE)),
+                neg_ratio=int(s.get("neg_ratio", NEGATIVE_SAMPLE_RATIO)),
+                neg_power=float(s.get("neg_power", NEGATIVE_SAMPLING_POWER)),
+                lr=float(s.get("lr", LEARNING_RATE)),
                 epochs_run=int(m.get("epochs_run", len(epochs))), best_epoch=int(m.get("best_epoch", 0)),
                 n_train_users=int(m.get("n_train_users", 0)), n_albums=int(m.get("n_albums", 0)),
                 n_val_users_evaluated=int(m.get("n_val_users_evaluated", ranking.get("n_val_users_evaluated", 0))),
@@ -120,12 +128,12 @@ class LegacyArtifactsImportService:
             if key in hit:
                 metrics.append(Metric(subset=subset, source=source, name="hit_rate", value=float(hit[key]), k=10))
         for subset in ("val", "test"):
-            res = ranking.get(subset) or {}
+            subset_ranking = ranking.get(subset) or {}
             for source in ("model", "baseline"):
                 for name in ("precision", "recall", "f1"):
-                    if name in res.get(source, {}):
+                    if name in subset_ranking.get(source, {}):
                         metrics.append(Metric(subset=subset, source=source, name=name,
-                                              value=float(res[source][name]), k=10))
+                                              value=float(subset_ranking[source][name]), k=10))
         self.metric_dao.save_all(run.id, metrics)
         print(f"Entrenamiento: 1 importado (#{run.id}) con {len(epochs)} épocas y {len(metrics)} métricas.")
         return True

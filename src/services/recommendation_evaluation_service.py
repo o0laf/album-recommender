@@ -11,7 +11,7 @@ Cómo se mide (para cada usuario de test, que la red NUNCA vio en el entrenamien
 Después se promedia entre todos los usuarios."""
 import numpy as np
 
-from config import K
+from config import RECOMMENDATION_COUNT
 from daos.metric_dao import MetricDAO
 from daos.training_run_dao import TrainingRunDAO
 from domain.metric import Metric
@@ -31,52 +31,52 @@ class RecommendationEvaluationService:
     def popular_ranking(popularity):
         return np.argsort(-popularity, kind="stable")   # de más a menos popular
 
-    def baseline_hit_rate(self, popularity, inputs, targets, k=K):
+    def baseline_hit_rate(self, popularity, inputs, targets, k=RECOMMENDATION_COUNT):
         ranking = self.popular_ranking(popularity)[: k + inputs.shape[1]].tolist()
         hits = 0
-        for ins, target in zip(inputs, targets):
-            ya_puestos = set(ins.tolist())
-            recs = [x for x in ranking if x not in ya_puestos][:k]   # no recomendar lo que ya puso
-            hits += int(target in recs)
+        for input_albums, target in zip(inputs, targets):
+            supplied_albums = set(input_albums.tolist())
+            recommendations = [album for album in ranking if album not in supplied_albums][:k]
+            hits += int(target in recommendations)
         return hits / len(inputs)
 
-    def top_k_popular(self, popularity, inputs, k=K):
+    def top_k_popular(self, popularity, inputs, k=RECOMMENDATION_COUNT):
         """Baseline: los k más populares, saltando los que el usuario ya puso."""
         ranking = self.popular_ranking(popularity)[: k + inputs.shape[1]].tolist()
-        out = []
-        for ins in inputs:
-            ya_puestos = set(ins.tolist())
-            out.append([x for x in ranking if x not in ya_puestos][:k])
-        return np.array(out)
+        rankings = []
+        for input_albums in inputs:
+            supplied_albums = set(input_albums.tolist())
+            rankings.append([album for album in ranking if album not in supplied_albums][:k])
+        return np.array(rankings)
 
     # ---------- Red ----------
 
     @staticmethod
-    def top_k_model(emb_norm, inputs, k=K, batch=500):
+    def top_k_model(emb_norm, inputs, k=RECOMMENDATION_COUNT, batch=500):
         """Los k álbumes recomendados por la red para cada usuario (matriz usuarios x k)."""
-        out = []
+        user_rankings = []
         for start in range(0, len(inputs), batch):           # por tandas, para no llenar la RAM
-            ins = inputs[start:start + batch]
-            q = AlbumRecommendationService.normalize(emb_norm[ins].mean(axis=1))   # promedio de los 4 álbumes
-            scores = q @ emb_norm.T
-            scores[np.arange(len(ins))[:, None], ins] = -np.inf   # no recomendar los 4 dados
-            out.append(np.argpartition(scores, -k, axis=1)[:, -k:])
-        return np.vstack(out)
+            input_batch = inputs[start:start + batch]
+            query = AlbumRecommendationService.normalize(emb_norm[input_batch].mean(axis=1))
+            scores = query @ emb_norm.T
+            scores[np.arange(len(input_batch))[:, None], input_batch] = -np.inf
+            user_rankings.append(np.argpartition(scores, -k, axis=1)[:, -k:])
+        return np.vstack(user_rankings)
 
     # ---------- Métricas ----------
 
     @staticmethod
-    def precision_recall_f1(top, relevants, k=K):
+    def precision_recall_f1(rankings, relevants, k=RECOMMENDATION_COUNT):
         """Promedia precision, recall y F1 entre usuarios.
         top: matriz usuarios x k. relevants: lista con los álbumes que le gustaron a cada uno."""
         precisions, recalls, f1s = [], [], []
-        for recs, rel in zip(top, relevants):
-            hits = int(np.isin(recs, rel).sum())
+        for recommendations, relevant_albums in zip(rankings, relevants):
+            hits = int(np.isin(recommendations, relevant_albums).sum())
             p = hits / k
-            r = hits / len(rel)
-            f1 = 2 * p * r / (p + r) if hits > 0 else 0.0     # sin aciertos: F1 = 0
+            recall = hits / len(relevant_albums)
+            f1 = 2 * p * recall / (p + recall) if hits > 0 else 0.0
             precisions.append(p)
-            recalls.append(r)
+            recalls.append(recall)
             f1s.append(f1)
         return {
             "precision": float(np.mean(precisions)),
@@ -84,7 +84,7 @@ class RecommendationEvaluationService:
             "f1": float(np.mean(f1s)),
         }
 
-    def evaluate_ranking(self, emb_norm, popularity, inputs, relevants, k=K):
+    def evaluate_ranking(self, emb_norm, popularity, inputs, relevants, k=RECOMMENDATION_COUNT):
         """Devuelve las métricas de la red y del baseline de populares."""
         return {
             "model": self.precision_recall_f1(self.top_k_model(emb_norm, inputs, k), relevants, k),
@@ -92,16 +92,16 @@ class RecommendationEvaluationService:
         }
 
     @staticmethod
-    def print_table(res, k=K):
+    def print_table(results, k=RECOMMENDATION_COUNT):
         print(f"              precision@{k}  recall@{k}   F1@{k}")
         for name, label in (("model", "Red     "), ("baseline", "Populares")):
-            m = res[name]
-            print(f"  {label}   {m['precision']:.4f}       {m['recall']:.4f}     {m['f1']:.4f}")
+            metrics = results[name]
+            print(f"  {label}   {metrics['precision']:.4f}       {metrics['recall']:.4f}     {metrics['f1']:.4f}")
 
     @staticmethod
-    def to_metrics(subset, res, k=K):
+    def to_metrics(subset, results, k=RECOMMENDATION_COUNT):
         """Pasa el resultado de evaluate_ranking() a una lista de Metric (para guardar en la base)."""
-        return [Metric(subset=subset, source=source, name=name, value=res[source][name], k=k)
+        return [Metric(subset=subset, source=source, name=name, value=results[source][name], k=k)
                 for source in ("model", "baseline") for name in ("precision", "recall", "f1")]
 
     # ---------- Comandos que dispara la consola ----------
@@ -122,12 +122,16 @@ class RecommendationEvaluationService:
             raise SystemExit("No hay ningún entrenamiento registrado en la base. "
                              "Corré 'python main.py train' (o 'python main.py import-legacy' si ya tenías resultados).")
         data = RatingsDatasetService().build_data()
-        art = AlbumRecommendationService().art
-        res = self.evaluate_ranking(art.emb_norm, data.popularity, data.test_inputs, data.test_relevant)
+        artifacts = AlbumRecommendationService().art
+        results = self.evaluate_ranking(
+            artifacts.emb_norm,
+            data.popularity,
+            data.test_inputs,
+            data.test_relevant,
+        )
         print("\nTEST (usuarios que la red nunca vio):")
-        self.print_table(res)
+        self.print_table(results)
 
         # Se guarda en la base, sobre el último entrenamiento (si ya había esas métricas, se pisan)
-        self.metric_dao.save_all(run.id, self.to_metrics("test", res))
+        self.metric_dao.save_all(run.id, self.to_metrics("test", results))
         print(f"Métricas guardadas en la base (entrenamiento #{run.id}).")
-        print(f"Guardé las métricas en {path}")
